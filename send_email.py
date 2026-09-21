@@ -16,54 +16,63 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
-# --- [PLACEHOLDER VALUES BELOW] ---
+# --- CONFIGURATION ---
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
-SENDER_EMAIL = "your_email@gmail.com" # [PLACEHOLDER VALUE]
-APP_PASSWORD = "your_app_password" # [PLACEHOLDER VALUE] Do not share your real password!
-PDF_PATH = r"C:\Path\To\Your\dummy_portfolio.pdf" # [PLACEHOLDER VALUE]
+SENDER_EMAIL = "your_email@gmail.com"
+APP_PASSWORD = "your_16_digit_app_password" 
+PDF_PATH = r"C:\Path\To\Your\portfolio.pdf"
+SENDER_NAME = "Your Name"
 
-LEADS_FILE = "dummy_leads.csv" # [PLACEHOLDER VALUE]
+LEADS_FILE = "leads.csv"
 EMAIL_TRACKER_FILE = "email_contacted_leads.csv"
 WP_TRACKER_FILE = "wp_contacted_leads.csv"
-BATCH_SIZE = 25 # Lower limit to protect SMTP reputation
-# --- [END PLACEHOLDERS] ---
+BATCH_SIZE = 25  # Safe daily limit for free Gmail accounts
 
 if not os.path.exists(LEADS_FILE):
-    print("Leads file not found.")
+    print(f"Error: {LEADS_FILE} not found.")
     exit()
 
 df_leads = pd.read_csv(LEADS_FILE, dtype={'phone': str})
 
+# 1. Identify companies already emailed
 email_contacted_names = set()
 if os.path.exists(EMAIL_TRACKER_FILE):
     try:
         df_email_done = pd.read_csv(EMAIL_TRACKER_FILE)
         email_contacted_names = set(df_email_done['company_name'].dropna().astype(str).str.strip().str.lower())
     except Exception:
-        pass
+        email_contacted_names = set()
 
+# 2. Target leads that haven't been emailed yet
 pending_emails = df_leads[~df_leads['company_name'].astype(str).str.strip().str.lower().isin(email_contacted_names)]
 
 if pending_emails.empty:
+    print("No pending leads ready for email outreach right now.")
     exit()
 
 batch_to_email = pending_emails.head(BATCH_SIZE)
+print(f"Starting Email batch: {len(batch_to_email)} leads queued.")
 
 def send_pitch(to_email, contact_name, company_name):
     msg = MIMEMultipart()
-    msg['From'] = f"Your Name <{SENDER_EMAIL}>" # [PLACEHOLDER VALUE]
+    msg['From'] = f"{SENDER_NAME} <{SENDER_EMAIL}>"
     msg['To'] = to_email
-    msg['Subject'] = f"Custom Request for {company_name}" # [PLACEHOLDER VALUE]
+    msg['Subject'] = f"Custom Services for {company_name}"
 
-    # [PLACEHOLDER VALUE] customize body text
-    body = f"Hi {contact_name},\n\nThis is a placeholder pitch for {company_name}."
+    body = f"""Hi {contact_name},
+
+[Your email pitch goes here. Keep it concise and personalized to {company_name}.]
+
+Best regards,
+{SENDER_NAME}
+"""
     msg.attach(MIMEText(body, 'plain'))
 
     if os.path.exists(PDF_PATH):
         with open(PDF_PATH, "rb") as f:
             attach = MIMEApplication(f.read(), _subtype="pdf")
-            attach.add_header('Content-Disposition', 'attachment', filename="portfolio.pdf")
+            attach.add_header('Content-Disposition', 'attachment', filename="Case_Study.pdf")
             msg.attach(attach)
 
     with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
@@ -71,7 +80,7 @@ def send_pitch(to_email, contact_name, company_name):
         server.send_message(msg)
 
 for index, row in batch_to_email.iterrows():
-    company = row['company_name'] if pd.notna(row.get('company_name')) else "Company"
+    company = row['company_name'] if pd.notna(row.get('company_name')) else "your company"
     contact = row['contact_name'] if pd.notna(row.get('contact_name')) else "there"
     raw_email = row.get('email')
 
@@ -79,15 +88,34 @@ for index, row in batch_to_email.iterrows():
         clean_email = str(raw_email).strip().split(';')[0].strip()
         try:
             send_pitch(clean_email, contact, company)
-            time.sleep(random.randint(180, 300)) # 3 to 5 minute SMTP cooldown
+            print(f"Sent email to {clean_email} ({company})")
+            
+            # Safe SMTP cooldown timer (60-120s to prevent velocity locks)
+            cooldown = random.randint(60, 120)
+            print(f"Waiting {cooldown}s before next email...")
+            time.sleep(cooldown)
+            
         except Exception as e:
-            pass
+            print(f"Failed sending email to {clean_email}: {e}")
+    else:
+        print(f"No valid email listed for {company}, skipping email send.")
 
+    # Immediately log this lead to email_contacted_leads.csv
     logged_row = pd.DataFrame([row])
     header_needed = not os.path.exists(EMAIL_TRACKER_FILE)
+    
+    # SAFETY CHECK: Ensure the file ends with a clean new line before appending
+    if not header_needed:
+        with open(EMAIL_TRACKER_FILE, "a+", encoding="utf-8") as f:
+            f.seek(0, 2)
+            if f.tell() > 0:
+                f.seek(f.tell() - 1, 0)
+                if f.read(1) != '\n':
+                    f.write('\n')
+
     logged_row.to_csv(EMAIL_TRACKER_FILE, mode='a', header=header_needed, index=False)
 
-# Smart Cleanup Logic
+# 4. Smart Cleanup: Remove fully processed leads
 df_email_done = pd.read_csv(EMAIL_TRACKER_FILE)
 em_set = set(df_email_done['company_name'].dropna().astype(str).str.strip().str.lower())
 
@@ -102,3 +130,6 @@ if os.path.exists(WP_TRACKER_FILE):
 fully_processed_companies = em_set.intersection(wp_set)
 remaining_leads = df_leads[~df_leads['company_name'].astype(str).str.strip().str.lower().isin(fully_processed_companies)]
 remaining_leads.to_csv(LEADS_FILE, index=False)
+
+print(f"\nEmail sequence finished successfully!")
+print(f"{len(remaining_leads)} leads remaining in {LEADS_FILE} awaiting further processing.")
